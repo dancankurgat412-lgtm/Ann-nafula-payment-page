@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#087443">
+  <title>Registration Fee | M-Pesa</title>
+  <style>
+    :root { color-scheme: light; --green:#087443; --dark:#163329; --muted:#68766f; --line:#dce7e0; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; padding:22px; background:linear-gradient(145deg,#eef8f1,#f8fbf9 55%,#e6f3eb); font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--dark); }
+    .card { width:min(100%,440px); background:#fff; border:1px solid var(--line); border-radius:24px; padding:28px; box-shadow:0 18px 55px #164a2d12; }
+    .brand { display:flex; align-items:center; gap:12px; margin-bottom:24px; }
+    .mark { display:grid; place-items:center; width:46px;height:46px;border-radius:14px;background:#e3f5e9;color:var(--green);font-weight:900;font-size:23px; }
+    .eyebrow { color:var(--green);font-weight:800;font-size:12px;letter-spacing:.12em;text-transform:uppercase; }
+    h1 { margin:5px 0 8px;font-size:28px;letter-spacing:-.04em; }
+    .intro { margin:0 0 24px;color:var(--muted);line-height:1.55;font-size:14px; }
+    label { display:block;margin:16px 0 7px;font-weight:700;font-size:13px; }
+    input { width:100%; padding:14px 15px; border:1px solid #cad9d0; border-radius:12px; background:#fff; color:var(--dark); font:inherit; outline:none; }
+    input:focus { border-color:var(--green);box-shadow:0 0 0 3px #08744318; }
+    .amount-wrap { position:relative; }
+    .currency { position:absolute;left:14px;top:14px;font-weight:800;color:var(--muted); }
+    #amount { padding-left:62px; }
+    button { margin-top:22px;width:100%;border:0;border-radius:13px;background:var(--green);color:#fff;padding:15px;font:inherit;font-weight:800;cursor:pointer;box-shadow:0 7px 16px #08744325; }
+    button:disabled { opacity:.6;cursor:wait; }
+    .secure { margin:14px 0 0;text-align:center;color:var(--muted);font-size:12px; }
+    .status { display:none;margin-top:18px;padding:13px 14px;border-radius:12px;font-size:14px;line-height:1.5;overflow-wrap:anywhere; }
+    .status.show { display:block; }
+    .status.info { background:#eef6ff;color:#194b78; }
+    .status.success { background:#e8f7ed;color:#176338; }
+    .status.error { background:#fff0ef;color:#922b24; }
+    .small { margin-top:20px;border-top:1px solid var(--line);padding-top:15px;color:var(--muted);font-size:11px;line-height:1.5; }
+    .small strong { color:#43564b; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand">
+      <div class="mark">M</div>
+      <div><div class="eyebrow">Secure checkout</div><div style="font-weight:800">Registration payment</div></div>
+    </div>
+    <h1>Pay your registration fee</h1>
+    <p class="intro">Enter the amount and the Safaricom M-Pesa number that should receive the payment prompt. Check the details before continuing.</p>
+    <form id="payment-form">
+      <label for="phone">M-Pesa phone number</label>
+      <input id="phone" name="phone" inputmode="tel" autocomplete="tel" placeholder="0712 345 678" maxlength="16" required>
+      <label for="amount">Amount (KES)</label>
+      <div class="amount-wrap"><span class="currency">KES</span><input id="amount" name="amount" type="number" min="1" max="150000" step="1" inputmode="numeric" placeholder="500" required></div>
+      <button id="pay-button" type="submit">Pay with M-Pesa</button>
+    </form>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+    <p class="secure">You will enter your M-Pesa PIN only on the official phone prompt.</p>
+    <div class="small"><strong>Payment safety:</strong> Do not share your M-Pesa PIN or OTP with anyone. A payment is confirmed only after the payment provider sends a successful result to this website.</div>
+  </main>
+<script>
+(() => {
+  const form = document.getElementById('payment-form');
+  const phoneInput = document.getElementById('phone');
+  const amountInput = document.getElementById('amount');
+  const button = document.getElementById('pay-button');
+  const statusBox = document.getElementById('status');
+  let pollTimer = null;
+
+  function showStatus(message, type) {
+    statusBox.textContent = message;
+    statusBox.className = 'status show ' + type;
+  }
+  function normalizePhone(value) {
+    let digits = value.replace(/\D/g, '');
+    if (digits.startsWith('0') && digits.length === 10) digits = '254' + digits.slice(1);
+    if (digits.startsWith('7') && digits.length === 9) digits = '254' + digits;
+    if (digits.startsWith('1') && digits.length === 9) digits = '254' + digits;
+    return digits;
+  }
+  async function checkStatus(checkoutRequestId, attemptsLeft) {
+    try {
+      const response = await fetch('/api/status?id=' + encodeURIComponent(checkoutRequestId));
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not check payment status.');
+      if (data.status === 'SUCCESS') {
+        showStatus('Payment confirmed. M-Pesa receipt: ' + (data.receipt || 'received') + '. Keep your M-Pesa confirmation message.', 'success');
+        button.disabled = false; button.textContent = 'Pay with M-Pesa'; return;
+      }
+      if (data.status === 'FAILED') {
+        showStatus('Payment was not completed. ' + (data.resultDesc || 'Please try again if needed.'), 'error');
+        button.disabled = false; button.textContent = 'Try payment again'; return;
+      }
+      if (attemptsLeft > 0) {
+        showStatus('STK Push sent. Check your phone and enter your M-Pesa PIN to approve. Waiting for confirmation…', 'info');
+        pollTimer = setTimeout(() => checkStatus(checkoutRequestId, attemptsLeft - 1), 3000);
+      } else {
+        showStatus('The request is still pending. Check your M-Pesa messages before trying again to avoid paying twice.', 'info');
+        button.disabled = false; button.textContent = 'Check / try again';
+      }
+    } catch (err) {
+      if (attemptsLeft > 0) {
+        pollTimer = setTimeout(() => checkStatus(checkoutRequestId, attemptsLeft - 1), 4000);
+      } else {
+        showStatus('We could not confirm the result yet. Check your M-Pesa messages before retrying.', 'info');
+        button.disabled = false; button.textContent = 'Pay with M-Pesa';
+      }
+    }
+  }
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (pollTimer) clearTimeout(pollTimer);
+    const phone = normalizePhone(phoneInput.value);
+    const amount = Number(amountInput.value);
+    if (!/^254[17]\d{8}$/.test(phone)) {
+      showStatus('Enter a valid Kenyan mobile number, for example 0712345678.', 'error'); return;
+    }
+    if (!Number.isInteger(amount) || amount < 1 || amount > 150000) {
+      showStatus('Enter a whole-number amount between KES 1 and KES 150,000.', 'error'); return;
+    }
+    button.disabled = true; button.textContent = 'Sending request…';
+    showStatus('Connecting securely to M-Pesa…', 'info');
+    try {
+      const response = await fetch('/api/stkpush', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, amount })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not start payment.');
+      showStatus(data.message || 'STK Push requested. Check your phone.', 'info');
+      button.textContent = 'Waiting for M-Pesa…';
+      checkStatus(data.checkoutRequestId, 35);
+    } catch (err) {
+      showStatus(err.message || 'Payment request failed. Please try again later.', 'error');
+      button.disabled = false; button.textContent = 'Pay with M-Pesa';
+    }
+  });
+})();
+</script>
+</body>
+</html>
